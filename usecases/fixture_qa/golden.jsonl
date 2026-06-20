@@ -1,0 +1,5 @@
+{"input_id": "q1", "input": {"question": "What is the capital of France?"}, "references": {"exact_answer": "Paris"}, "source_refs": [], "metadata": {"topic": "geography"}}
+{"input_id": "q2", "input": {"question": "What is the capital of Japan?"}, "references": {"exact_answer": "Tokyo"}, "source_refs": [], "metadata": {"topic": "geography"}}
+{"input_id": "q3", "input": {"question": "What is 2 + 2?"}, "references": {"exact_answer": "4"}, "source_refs": [], "metadata": {"topic": "math"}}
+{"input_id": "q4", "input": {"question": "What is the chemical symbol for gold?"}, "references": {"exact_answer": "Au"}, "source_refs": [], "metadata": {"topic": "chemistry"}}
+{"input_id": "q5", "input": {"question": "What is the largest planet in our solar system?"}, "references": {"exact_answer": "Jupiter"}, "source_refs": [], "metadata": {"topic": "astronomy"}}

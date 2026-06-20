@@ -1,0 +1,31 @@
+[project]
+name = "kelp-benchmark"
+version = "0.1.0"
+description = "Kelp — Continuous Model Benchmarking & Research (v1 POC)"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.18.4",
+    "jsonschema>=4.26.0",
+    "litellm>=1.89.2",
+    "mcp>=1.2.0",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.14.2",
+    "pyyaml>=6.0.3",
+    "structlog>=26.1.0",
+    "tenacity>=9.1.4",
+]
+
+[dependency-groups]
+# Heavier runtime deps added as the build progresses (kept out of the spike sync):
+#   psycopg[binary], alembic, structlog, tenacity, httpx, apscheduler, streamlit
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["common", "harness", "mcp_server", "daemon"]

@@ -1,0 +1,21 @@
+# Secrets — NEVER commit
+keys.json
+.env
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Local
+/tmp/
+*.log
+.DS_Store
+
+# Generated artifacts
+reports/
+tmp*.json

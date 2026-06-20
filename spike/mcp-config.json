@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "spike": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/Users/tanuj/work/model_benchmark",
+        "python",
+        "spike/echo_server.py"
+      ]
+    }
+  }
+}
