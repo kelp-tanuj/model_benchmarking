@@ -18,17 +18,25 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   also moved to allowlist + `--strict-mcp-config` (rep) / `--tools ""` (report). Migration 0003
   adds `teams_inbox.attempts`/`last_error`. User wires Power Automate flows.
 
+- **Phase 4 — discovery ✅** (OpenRouter half): `daemon/discovery.py` syncs OpenRouter
+  `/models` (idempotent upsert, `last_seen`), detects new models (fresh-insert join), applies
+  the relevance pre-filter (text modality, ≥`relevance_min_context`, optional price cap),
+  dedups via `candidates` (rejected stays rejected), and posts Benchmark/Skip cards. First sync
+  is a baseline (no flood). Retirement = sync-diff on lagging `last_seen`, alerting only for
+  benchmarked/baseline models, deduped via a run_logs `retirement` event. Wired into the
+  nightly scheduler (discovery → drift, serial). **Live catalog populated: 340 real models.**
+  Foundry presence-check catalog is the remaining half — blocked on Azure creds.
+
 ## Next
-- **Phase 4 — discovery**: OpenRouter `/models` sync + new-model SQL join + dedup ledger +
-  relevance filter + discovery cards (buildable now, no key). Foundry presence-check catalog
-  needs Azure creds. Retirement = sync-diff on lagging `last_seen`.
-- **Phase 5 — provider resolution** (Foundry→native/HF→defer) + generalize to more use cases.
+- **Phase 5 — provider resolution** (Foundry presence-check → native/HF → defer) + Foundry
+  catalog sync (needs Azure creds) + generalize to more use cases.
 
 ## Run commands (from repo root; `.env` has DATABASE_URL)
 - Tests: `uv run pytest -q`
 - Migrate: `uv run alembic -c db/alembic.ini upgrade head`
 - Benchmark: `uv run python -m daemon.orchestrator --use-case fixture_qa --slug gemini/gemini-2.5-flash-lite --provider gemini --model gemini-2.5-flash-lite --reps 3 --report`
 - Drift: `uv run python -m daemon.drift_runner --use-case fixture_qa`
+- Discovery sync: `uv run python -m daemon.discovery` (live) · `--fixture <json>` (offline) · `--no-cards`
 - Scheduler: `uv run python -m daemon.scheduler --list`
 - HTTP endpoint: `uv run python -m daemon.http_app`   ·   Consumer: `uv run python -m daemon.teams_consumer`
 - Leaderboard: `uv run streamlit run apps/user/app.py`

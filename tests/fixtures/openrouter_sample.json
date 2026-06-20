@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "id": "vendor/text-good",
+      "name": "Text Good",
+      "context_length": 128000,
+      "architecture": {"modality": "text->text", "input_modalities": ["text"], "output_modalities": ["text"]},
+      "pricing": {"prompt": "0.0000025", "completion": "0.00001"}
+    },
+    {
+      "id": "vendor/image-only",
+      "name": "Image Only",
+      "context_length": 64000,
+      "architecture": {"modality": "text->image"},
+      "pricing": {"prompt": "0.00001", "completion": "0"}
+    },
+    {
+      "id": "vendor/tiny-ctx",
+      "name": "Tiny Context",
+      "context_length": 2048,
+      "architecture": {"modality": "text->text"},
+      "pricing": {"prompt": "0", "completion": "0"}
+    }
+  ]
+}

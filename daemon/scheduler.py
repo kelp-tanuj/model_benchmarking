@@ -1,6 +1,6 @@
-"""Off-hours scheduler (phase 2): APScheduler that triggers drift re-runs in the configured
-off-hours window. The single serial worker model means scheduled jobs never overlap a manual
-benchmark — they just queue behind it. (The discovery sync job is added in phase 4.)
+"""Off-hours scheduler: APScheduler runs a nightly job in the configured off-hours window.
+One job runs the discovery sync THEN the drift re-runs, sequentially — a single serial
+sequence so a scheduled sync never overlaps a drift benchmark or a manual run.
 
 Run:  uv run python -m daemon.scheduler        # blocks, runs on schedule
 Inspect:  uv run python -m daemon.scheduler --list   # print jobs and exit
@@ -14,7 +14,18 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from common.config import settings
+from daemon.discovery import sync_openrouter
 from daemon.drift_runner import run_drift, use_cases_with_baseline
+
+
+def discovery_all() -> None:
+    try:
+        res = sync_openrouter()
+        print(f"[scheduler] discovery: {res['synced']} synced, "
+              f"{len(res['discoveries'])} new candidate(s), "
+              f"{len(res['retired_alerted'])} retirement alert(s)")
+    except Exception as exc:  # a sync failure must not block drift
+        print(f"[scheduler] discovery error: {type(exc).__name__}: {exc}")
 
 
 def drift_all() -> None:
@@ -23,6 +34,12 @@ def drift_all() -> None:
             run_drift(uc)
         except Exception as exc:  # isolate use cases so one failure can't abort the sweep
             print(f"[scheduler] drift error for {uc}: {exc}")
+
+
+def nightly() -> None:
+    """The single off-hours sequence: discover new models, then re-benchmark for drift."""
+    discovery_all()
+    drift_all()
 
 
 def _parse_offhours() -> tuple[int, int]:
@@ -38,10 +55,10 @@ def build_scheduler() -> BlockingScheduler:
     sched = BlockingScheduler(timezone=settings.timezone)
     hour, minute = _parse_offhours()
     sched.add_job(
-        drift_all,
+        nightly,
         CronTrigger(hour=hour, minute=minute, timezone=settings.timezone),
-        id="drift_rerun",
-        name="off-hours drift re-runs",
+        id="nightly",
+        name="off-hours discovery sync + drift re-runs",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

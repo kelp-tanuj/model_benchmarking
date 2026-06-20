@@ -301,6 +301,79 @@ def list_candidates(conn: psycopg.Connection, status: str | None = None) -> list
     return conn.execute("SELECT * FROM candidates ORDER BY created_at DESC").fetchall()
 
 
+# --- OpenRouter catalog sync (discovery radar) --------------------------------------
+
+def count_openrouter_models(conn: psycopg.Connection) -> int:
+    return conn.execute("SELECT count(*) AS n FROM openrouter_models").fetchone()["n"]
+
+
+def db_now(conn: psycopg.Connection):
+    """The database clock — use as the sync cutoff so retirement diffs are skew-free."""
+    return conn.execute("SELECT now() AS t").fetchone()["t"]
+
+
+def upsert_openrouter_model(
+    conn: psycopg.Connection,
+    *,
+    slug: str,
+    name: str | None,
+    modality: str | None,
+    context_length: int | None,
+    price_prompt: float | None,
+    price_completion: float | None,
+    raw: Any,
+) -> bool:
+    """Idempotent catalog upsert; returns True iff the row was newly inserted (a fresh insert
+    has first_seen == last_seen == this transaction's now(); an update moves last_seen only)."""
+    row = conn.execute(
+        """
+        INSERT INTO openrouter_models
+            (slug, name, modality, context_length, price_prompt, price_completion, raw,
+             first_seen, last_seen)
+        VALUES (%s,%s,%s,%s,%s,%s,%s, now(), now())
+        ON CONFLICT (slug) DO UPDATE SET
+            name=EXCLUDED.name, modality=EXCLUDED.modality,
+            context_length=EXCLUDED.context_length, price_prompt=EXCLUDED.price_prompt,
+            price_completion=EXCLUDED.price_completion, raw=EXCLUDED.raw, last_seen=now()
+        RETURNING (first_seen = last_seen) AS is_new
+        """,
+        (slug, name, modality, context_length, price_prompt, price_completion, Json(raw)),
+    ).fetchone()
+    return bool(row["is_new"])
+
+
+def get_openrouter_model(conn: psycopg.Connection, slug: str) -> dict | None:
+    return conn.execute(
+        "SELECT slug, name, modality, context_length, price_prompt, price_completion "
+        "FROM openrouter_models WHERE slug=%s",
+        (slug,),
+    ).fetchone()
+
+
+def get_retired_important(conn: psycopg.Connection, cutoff) -> list[str]:
+    """Models NOT seen in the latest sync (last_seen < cutoff) that we actually care about —
+    ones we've benchmarked or that back a baseline. Others are recorded but not alerted (noise)."""
+    rows = conn.execute(
+        """
+        SELECT om.slug FROM openrouter_models om
+        WHERE om.last_seen < %s
+          AND (om.slug IN (SELECT slug FROM benchmarks)
+               OR om.slug IN (SELECT model FROM baselines WHERE model IS NOT NULL))
+        ORDER BY om.slug
+        """,
+        (cutoff,),
+    ).fetchall()
+    return [r["slug"] for r in rows]
+
+
+def has_event(conn: psycopg.Connection, event: str, slug: str) -> bool:
+    """Has a run_logs event of this kind already been recorded for this slug? (alert dedup)."""
+    return conn.execute(
+        "SELECT 1 FROM run_logs WHERE event=%s AND detail->>'slug'=%s LIMIT 1",
+        (event, slug),
+    ).fetchone() is not None
+
+
 def search_openrouter(conn: psycopg.Connection, query: str, limit: int = 10) -> list[dict]:
     """Fuzzy name/slug match over the OpenRouter catalog (the sole discovery radar).
 
