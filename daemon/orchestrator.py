@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -22,8 +23,8 @@ from common import repo
 from common.config import settings
 from common.db import connect
 from harness.aggregate import aggregate_benchmark, default_metric_rollup, per_run_means
-from harness.drift import drift_check
-from harness.types import Aggregate, ItemScore
+from harness.drift import compute_drift
+from harness.types import ItemScore
 from harness.usecase import validate
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,7 +33,20 @@ TOOLS = [
     "score_deterministic", "get_results", "write_item_scores",
 ]
 ALLOWED = ",".join(f"mcp__kelp__{t}" for t in TOOLS)
-NO_WEB = ["--disallowedTools", "WebSearch,WebFetch"]
+
+# Deny every built-in fs/shell/web tool on EVERY claude call so the agent can never read
+# keys.json/.env or run shell — defense-in-depth on top of the rep's MCP-only allowlist.
+DENY_TOOLS = ("WebSearch,WebFetch,Bash,Read,Write,Edit,MultiEdit,Glob,Grep,"
+              "NotebookEdit,Task,LS")
+
+# Scrub anything secret-shaped before persisting agent output/stderr to the DB.
+_SECRET_RE = re.compile(
+    r"(AIza[0-9A-Za-z\-_]{20,}|sk-[A-Za-z0-9\-_]{16,}|postgres(?:ql)?://[^\s\"']+)"
+)
+
+
+def _scrub(obj):
+    return json.loads(_SECRET_RE.sub("***REDACTED***", json.dumps(obj)))
 
 REP_PROMPT = """You are running ONE evaluation repetition for use case '{use_case}', run_id={run_id}.
 Use ONLY the provided MCP tools. Do NOT use web search or any other tool.
@@ -90,16 +104,22 @@ def _mcp_config(provider: str | None, model: str | None, mock: bool) -> str:
 def _claude(prompt: str, *, mcp_config: str | None, allowed: str | None, max_turns: int,
             timeout: int) -> dict:
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", settings.judge_model,
-           "--max-turns", str(max_turns), *NO_WEB]
+           "--max-turns", str(max_turns), "--disallowedTools", DENY_TOOLS]
     if mcp_config:
         cmd += ["--mcp-config", mcp_config]
     if allowed:
         cmd += ["--allowedTools", allowed]
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT),
-                          env=dict(os.environ), timeout=timeout)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT),
+                              env=dict(os.environ), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"is_error": True, "result": None, "stderr": "timeout"}
     if not proc.stdout.strip():
-        return {"is_error": True, "result": None, "stderr": proc.stderr[-800:]}
-    return json.loads(proc.stdout)
+        return {"is_error": True, "result": None, "stderr": (proc.stderr or "")[-800:]}
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {"is_error": True, "result": None, "stderr": (proc.stdout or "")[-800:]}
 
 
 def run_rep(use_case: str, run_id: int, provider: str | None, model: str | None,
@@ -117,66 +137,79 @@ def run_rep(use_case: str, run_id: int, provider: str | None, model: str | None,
 
 def run_benchmark(*, use_case: str, slug: str, provider: str | None, model: str | None,
                   route: str | None, n_reps: int, mock: bool = False,
-                  is_baseline: bool = False) -> dict:
+                  is_baseline: bool = False, is_drift: bool = False) -> dict:
     uc, _golden = validate(use_case)
     directions = {m.name: m.direction for m in uc.metrics}
-    # default metrics are lower-is-better for cost/latency
     directions.update({"latency_ms": "lower_better", "cost": "lower_better"})
     judge = settings.judge_model
 
     with connect() as c:
         bid = repo.create_benchmark(
             c, slug=slug, use_case=use_case, route=route, provider=provider,
-            judge_model=judge, judge_version=judge, n_reps=n_reps, is_baseline=is_baseline,
+            judge_model=judge, judge_version=judge, n_reps=n_reps,
+            is_baseline=is_baseline, is_drift=is_drift,
         )
         repo.log(c, benchmark_id=bid, run_id=None, level="info", event="benchmark_start",
-                 detail={"slug": slug, "n_reps": n_reps, "mock": mock})
+                 detail={"slug": slug, "n_reps": n_reps, "mock": mock, "is_drift": is_drift})
 
     per_rep_means: list[dict] = []
-    for rep in range(n_reps):
-        with connect() as c:
-            rid = repo.upsert_run(c, bid, rep)
-        result = run_rep(use_case, rid, provider, model, mock)
-        with connect() as c:
-            items = repo.get_item_scores(c, rid)
-            means = per_run_means([
-                ItemScore(input_id=i["input_id"], metric=i["metric"], mode=i["mode"],
-                          value=i["value"], rationale=i.get("rationale"))
-                for i in items
-            ])
-            means.update(default_metric_rollup(repo.get_results(c, rid)))  # latency/tokens/cost
-            for metric, val in means.items():
-                repo.upsert_scores_per_run(c, run_id=rid, use_case=use_case, metric=metric,
-                                           value=val)
-            status = "done" if result.get("is_error") is not True else "failed"
-            repo.finish_run(c, rid, status, transcript=result)
-            repo.log(c, benchmark_id=bid, run_id=rid, level="info", event="rep_done",
-                     detail={"means": means, "agent": result.get("result")})
-        per_rep_means.append(means)
+    any_failed = False
+    try:
+        for rep in range(n_reps):
+            with connect() as c:
+                rid = repo.upsert_run(c, bid, rep)
+            result = run_rep(use_case, rid, provider, model, mock)
+            ok = result.get("is_error") is not True
+            with connect() as c:
+                items = repo.get_item_scores(c, rid)
+                means = per_run_means([
+                    ItemScore(input_id=i["input_id"], metric=i["metric"], mode=i["mode"],
+                              value=i["value"], rationale=i.get("rationale"))
+                    for i in items
+                ])
+                means.update(default_metric_rollup(repo.get_results(c, rid)))
+                for metric, val in means.items():
+                    repo.upsert_scores_per_run(c, run_id=rid, use_case=use_case,
+                                               metric=metric, value=val)
+                repo.finish_run(c, rid, "done" if ok else "failed", transcript=_scrub(result))
+                repo.log(c, benchmark_id=bid, run_id=rid, level="info" if ok else "warning",
+                         event="rep_done", detail=_scrub({"ok": ok, "means": means}))
+            # Only count a fully-successful rep toward the aggregate, so a partial/failed rep
+            # can't skew the mean+range or the drift verdict.
+            if ok:
+                per_rep_means.append(means)
+            else:
+                any_failed = True
 
-    agg = aggregate_benchmark(per_rep_means)
-    drift: dict[str, str] = {}
-    with connect() as c:
-        for metric, a in agg.items():
-            repo.upsert_score(c, benchmark_id=bid, use_case=use_case, metric=metric,
-                              mean=a.mean, min=a.min, max=a.max)
-        baseline = repo.get_baseline(c, use_case)
-        for metric, a in agg.items():
-            if metric in baseline:
-                b = baseline[metric]
-                bd = Aggregate(mean=b["mean"], min=b["min"], max=b["max"], n=0)
-                drift[metric] = drift_check(
-                    a.mean, bd, directions.get(metric, "higher_better")
-                ).direction
-        if is_baseline:
+        if not per_rep_means:
+            with connect() as c:
+                repo.finish_benchmark(c, bid, "failed")
+            return {"benchmark_id": bid, "agg": {}, "drift": {}, "use_case": use_case,
+                    "slug": slug, "provider": provider, "route": route, "n_reps": n_reps,
+                    "status": "failed"}
+
+        agg = aggregate_benchmark(per_rep_means)
+        with connect() as c:
             for metric, a in agg.items():
-                repo.upsert_baseline(c, use_case=use_case, metric=metric, mean=a.mean,
-                                     min=a.min, max=a.max, model=slug, benchmark_id=bid,
-                                     judge_model=judge, judge_version=judge)
-        repo.finish_benchmark(c, bid, "done")
+                repo.upsert_score(c, benchmark_id=bid, use_case=use_case, metric=metric,
+                                  mean=a.mean, min=a.min, max=a.max)
+            drift = compute_drift(agg, repo.get_baseline(c, use_case), directions)
+            if is_baseline:
+                for metric, a in agg.items():
+                    repo.upsert_baseline(c, use_case=use_case, metric=metric, mean=a.mean,
+                                         min=a.min, max=a.max, model=slug, benchmark_id=bid,
+                                         judge_model=judge, judge_version=judge)
+            repo.finish_benchmark(c, bid, "partial" if any_failed else "done")
+    except Exception as exc:
+        with connect() as c:
+            repo.finish_benchmark(c, bid, "failed")
+            repo.log(c, benchmark_id=bid, run_id=None, level="error",
+                     event="benchmark_error", detail={"error": str(exc)[:500]})
+        raise
 
     return {"benchmark_id": bid, "agg": agg, "drift": drift, "use_case": use_case,
-            "slug": slug, "provider": provider, "route": route, "n_reps": n_reps}
+            "slug": slug, "provider": provider, "route": route, "n_reps": n_reps,
+            "status": "partial" if any_failed else "done"}
 
 
 def run_report(summary: dict) -> Path:

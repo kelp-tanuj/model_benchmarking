@@ -26,16 +26,18 @@ def create_benchmark(
     judge_version: str | None,
     n_reps: int,
     is_baseline: bool = False,
+    is_drift: bool = False,
 ) -> int:
     row = conn.execute(
         """
         INSERT INTO benchmarks
             (slug, use_case, route, provider, judge_model, judge_version, n_reps,
-             is_baseline, started_at, status)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s, now(), 'running')
+             is_baseline, is_drift, started_at, status)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, now(), 'running')
         RETURNING benchmark_id
         """,
-        (slug, use_case, route, provider, judge_model, judge_version, n_reps, is_baseline),
+        (slug, use_case, route, provider, judge_model, judge_version, n_reps, is_baseline,
+         is_drift),
     ).fetchone()
     return row["benchmark_id"]
 
@@ -245,6 +247,34 @@ def get_scores(conn: psycopg.Connection, benchmark_id: int) -> list[dict]:
     return conn.execute(
         "SELECT use_case, metric, mean, min, max FROM scores WHERE benchmark_id=%s",
         (benchmark_id,),
+    ).fetchall()
+
+
+def list_use_cases(conn: psycopg.Connection) -> list[str]:
+    rows = conn.execute(
+        "SELECT DISTINCT use_case FROM benchmarks WHERE status='done' ORDER BY use_case"
+    ).fetchall()
+    return [r["use_case"] for r in rows]
+
+
+def get_benchmarks(conn: psycopg.Connection, use_case: str) -> list[dict]:
+    """Completed candidate/baseline benchmarks for a use case (drift re-runs excluded)."""
+    return conn.execute(
+        """
+        SELECT benchmark_id, slug, provider, route, is_baseline, judge_model, judge_version,
+               n_reps, finished_at
+        FROM benchmarks
+        WHERE use_case=%s AND status='done' AND is_drift = false
+        ORDER BY is_baseline DESC, finished_at DESC
+        """,
+        (use_case,),
+    ).fetchall()
+
+
+def get_scores_for_use_case(conn: psycopg.Connection, use_case: str) -> list[dict]:
+    return conn.execute(
+        "SELECT benchmark_id, metric, mean, min, max FROM scores WHERE use_case=%s",
+        (use_case,),
     ).fetchall()
 
 
