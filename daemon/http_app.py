@@ -9,7 +9,8 @@ Routes:
   GET  /health           -> {"status": "ok"}                         (no secret)
   POST /enqueue          -> {model, source?, decided_by?}            -> candidate(queued)
   POST /callback/key     -> {provider, key, model?}                  -> keys.json
-                            both POSTs require header X-Kelp-Secret
+  POST /inbox            -> {kind, ...}  (Teams card/response data)  -> teams_inbox row
+                            all POSTs require header X-Kelp-Secret
 """
 
 from __future__ import annotations
@@ -105,6 +106,24 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 set_key(provider, key, model=data.get("model"))
                 self._send(200, {"stored": provider})  # never echo the key
+
+            elif self.path == "/inbox":
+                # Power Automate inbound: a card's Action.Submit data (or a free-text request)
+                # lands here and becomes a teams_inbox row the consumer processes. The whole
+                # body is the payload; `kind` selects the handler.
+                if not self._authorized():
+                    self._send(401, {"error": "unauthorized"})
+                    return
+                data = self._read_json()
+                if data is None:
+                    return
+                kind = data.get("kind")
+                if not kind or not isinstance(kind, str):
+                    self._send(400, {"error": "kind required"})
+                    return
+                with connect() as c:
+                    inbox_id = repo.add_teams_inbox(c, kind, data)
+                self._send(200, {"inbox_id": inbox_id})
             else:
                 self._send(404, {"error": "not found"})
         except Exception:

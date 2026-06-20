@@ -16,20 +16,32 @@ import urllib.request
 from common.config import settings
 
 
+def _is_interactive(card: dict | None) -> bool:
+    """A card the user must respond to (has buttons) → route to the post-and-wait flow."""
+    return bool(card) and any(
+        a.get("type") == "Action.Submit" for a in card.get("actions", [])
+    )
+
+
 def post(kind: str, target: str, text: str, card: dict | None = None) -> dict:
     """Send to the post-to-Teams flow. target is 'channel' or 'chat'.
 
     Every message goes out as an adaptive card (plain text is wrapped in a minimal one) so the
     Power Automate flow only ever needs a single "Post card" action — no card/text branching.
+    Interactive cards (with buttons) route to the post-and-wait flow when configured so the
+    response can come back via /inbox; everything else is fire-and-forget.
     """
     card = card or _text_card(text)
     payload = {"kind": kind, "target": target, "text": text, "card": card}
-    if not settings.teams_post_flow_url:
+    interactive = _is_interactive(card)
+    url = (settings.teams_card_flow_url if interactive and settings.teams_card_flow_url
+           else settings.teams_post_flow_url)
+    if not url:
         print(f"[teams] (no flow URL) would post [{kind}->{target}]: {text}")
         return {"posted": False, "reason": "no_flow_url"}
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
-        settings.teams_post_flow_url, data=data,
+        url, data=data,
         headers={"Content-Type": "application/json"}, method="POST",
     )
     try:

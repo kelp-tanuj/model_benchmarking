@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     key_ingest_secret: str | None = None  # guards the dev-tunnel key-ingest route
 
     # --- Teams (Power Automate Workflows) ---
-    teams_post_flow_url: str | None = None  # outbound: daemon POSTs cards to this flow
+    teams_post_flow_url: str | None = None  # outbound: informational cards (fire-and-forget)
+    teams_card_flow_url: str | None = None  # outbound: interactive cards (post-and-wait -> /inbox)
     http_host: str = "127.0.0.1"
     http_port: int = 8765
     teams_poll_seconds: int = 10
