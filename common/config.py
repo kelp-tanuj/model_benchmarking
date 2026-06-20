@@ -35,5 +35,11 @@ class Settings(BaseSettings):
     keys_path: str = "keys.json"
     key_ingest_secret: str | None = None  # guards the dev-tunnel key-ingest route
 
+    # --- Teams (Power Automate Workflows) ---
+    teams_post_flow_url: str | None = None  # outbound: daemon POSTs cards to this flow
+    http_host: str = "127.0.0.1"
+    http_port: int = 8765
+    teams_poll_seconds: int = 10
+
 
 settings = Settings()

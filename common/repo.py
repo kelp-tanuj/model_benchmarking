@@ -250,6 +250,87 @@ def get_scores(conn: psycopg.Connection, benchmark_id: int) -> list[dict]:
     ).fetchall()
 
 
+def upsert_candidate(
+    conn: psycopg.Connection,
+    *,
+    slug: str,
+    source: str,
+    status: str,
+    foundry_available: bool | None = None,
+    foundry_model_id: str | None = None,
+    decided_by: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO candidates (slug, source, status, foundry_available, foundry_model_id,
+                                decided_by, decided_at)
+        VALUES (%s,%s,%s,%s,%s,%s, CASE WHEN %s::text IS NULL THEN NULL ELSE now() END)
+        ON CONFLICT (slug) DO UPDATE SET
+            status=EXCLUDED.status,
+            foundry_available=COALESCE(EXCLUDED.foundry_available, candidates.foundry_available),
+            foundry_model_id=COALESCE(EXCLUDED.foundry_model_id, candidates.foundry_model_id),
+            decided_by=COALESCE(EXCLUDED.decided_by, candidates.decided_by),
+            decided_at=CASE WHEN EXCLUDED.decided_by IS NOT NULL THEN now()
+                            ELSE candidates.decided_at END
+        """,
+        (slug, source, status, foundry_available, foundry_model_id, decided_by, decided_by),
+    )
+
+
+def set_candidate_status(
+    conn: psycopg.Connection, slug: str, status: str, decided_by: str | None = None
+) -> None:
+    conn.execute(
+        "UPDATE candidates SET status=%s, decided_by=COALESCE(%s, decided_by), "
+        "decided_at=CASE WHEN %s::text IS NOT NULL THEN now() ELSE decided_at END WHERE slug=%s",
+        (status, decided_by, decided_by, slug),
+    )
+
+
+def get_candidate(conn: psycopg.Connection, slug: str) -> dict | None:
+    return conn.execute("SELECT * FROM candidates WHERE slug=%s", (slug,)).fetchone()
+
+
+def list_candidates(conn: psycopg.Connection, status: str | None = None) -> list[dict]:
+    if status:
+        return conn.execute(
+            "SELECT * FROM candidates WHERE status=%s ORDER BY created_at DESC", (status,)
+        ).fetchall()
+    return conn.execute("SELECT * FROM candidates ORDER BY created_at DESC").fetchall()
+
+
+def search_openrouter(conn: psycopg.Connection, query: str, limit: int = 10) -> list[dict]:
+    """Fuzzy name/slug match over the OpenRouter catalog (the sole discovery radar)."""
+    like = f"%{query.lower()}%"
+    return conn.execute(
+        "SELECT slug, name, context_length FROM openrouter_models "
+        "WHERE lower(slug) LIKE %s OR lower(name) LIKE %s ORDER BY slug LIMIT %s",
+        (like, like, limit),
+    ).fetchall()
+
+
+# --- Teams inbound poll table ---
+
+def add_teams_inbox(conn: psycopg.Connection, kind: str, payload: dict) -> int:
+    row = conn.execute(
+        "INSERT INTO teams_inbox (kind, payload) VALUES (%s,%s) RETURNING id",
+        (kind, Json(payload)),
+    ).fetchone()
+    return row["id"]
+
+
+def get_unprocessed_inbox(conn: psycopg.Connection, limit: int = 50) -> list[dict]:
+    return conn.execute(
+        "SELECT id, kind, payload FROM teams_inbox WHERE processed_at IS NULL "
+        "ORDER BY id LIMIT %s",
+        (limit,),
+    ).fetchall()
+
+
+def mark_inbox_processed(conn: psycopg.Connection, inbox_id: int) -> None:
+    conn.execute("UPDATE teams_inbox SET processed_at=now() WHERE id=%s", (inbox_id,))
+
+
 def list_use_cases(conn: psycopg.Connection) -> list[str]:
     rows = conn.execute(
         "SELECT DISTINCT use_case FROM benchmarks WHERE status='done' ORDER BY use_case"
