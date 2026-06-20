@@ -17,7 +17,12 @@ from common.config import settings
 
 
 def post(kind: str, target: str, text: str, card: dict | None = None) -> dict:
-    """Send to the post-to-Teams flow. target is 'channel' or 'chat'."""
+    """Send to the post-to-Teams flow. target is 'channel' or 'chat'.
+
+    Every message goes out as an adaptive card (plain text is wrapped in a minimal one) so the
+    Power Automate flow only ever needs a single "Post card" action — no card/text branching.
+    """
+    card = card or _text_card(text)
     payload = {"kind": kind, "target": target, "text": text, "card": card}
     if not settings.teams_post_flow_url:
         print(f"[teams] (no flow URL) would post [{kind}->{target}]: {text}")
@@ -48,6 +53,11 @@ def _card(title: str, body: list, actions: list | None = None) -> dict:
 
 def _text(t: str) -> dict:
     return {"type": "TextBlock", "text": t, "wrap": True}
+
+
+def _text_card(text: str) -> dict:
+    """Minimal card so even plain-text messages travel as an adaptive card."""
+    return {"type": "AdaptiveCard", "version": "1.5", "body": [_text(text)]}
 
 
 def discovery_card(slug: str, name: str | None = None, context_length: int | None = None) -> dict:
