@@ -23,9 +23,11 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   the relevance pre-filter (text modality, ≥`relevance_min_context`, optional price cap),
   dedups via `candidates` (rejected stays rejected), and posts Benchmark/Skip cards. First sync
   is a baseline (no flood). Retirement = sync-diff on lagging `last_seen`, alerting only for
-  benchmarked/baseline models, deduped via a run_logs `retirement` event. Wired into the
-  nightly scheduler (discovery → drift, serial). **Live catalog populated: 340 real models.**
-  Foundry presence-check catalog is the remaining half — blocked on Azure creds.
+  benchmarked/baseline models, deduped via a run_logs `retirement` event (writes verified, but
+  **dormant in real data** until `model_aliases` bridges the `google/…` vs `gemini/…` slug
+  namespaces in phase 5). Wired into the nightly scheduler (discovery → drift, serial).
+  **Live catalog populated: 340 real models.** Foundry presence-check catalog is the remaining
+  half — blocked on Azure creds.
 
 ## Next
 - **Phase 5 — provider resolution** (Foundry presence-check → native/HF → defer) + Foundry

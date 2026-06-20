@@ -352,7 +352,11 @@ def get_openrouter_model(conn: psycopg.Connection, slug: str) -> dict | None:
 
 def get_retired_important(conn: psycopg.Connection, cutoff) -> list[str]:
     """Models NOT seen in the latest sync (last_seen < cutoff) that we actually care about —
-    ones we've benchmarked or that back a baseline. Others are recorded but not alerted (noise)."""
+    ones we've benchmarked or that back a baseline. Others are recorded but not alerted (noise).
+
+    NOTE: this matches on exact slug, so it stays dormant until `model_aliases` bridges the
+    OpenRouter namespace (e.g. google/…) and our benchmark/baseline namespace (e.g. gemini/…).
+    That aliasing lands in phase 5; the diff logic itself is verified."""
     rows = conn.execute(
         """
         SELECT om.slug FROM openrouter_models om
