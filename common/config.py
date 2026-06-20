@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     http_host: str = "127.0.0.1"
     http_port: int = 8765
     teams_poll_seconds: int = 10
+    teams_inbox_max_attempts: int = 5  # dead-letter an inbox row after this many transient failures
 
 
 settings = Settings()

@@ -8,9 +8,15 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   scores` (mean+range); drift rule; separate `claude -p` report. Verified with real Gemini N=3.
 - **Phase 2 — leaderboard + drift ✅**: read-only Streamlit board, `drift_runner`, APScheduler
   off-hours cron. `benchmarks.is_drift` excludes drift re-runs from the board.
-- **Phase 3 — Teams daemon-side ✅**: HTTP endpoint (`/enqueue`, `/callback/key` secret-guarded,
-  `/health`), `teams.py` cards + post-to-flow, `dispatcher.py` (claude -p intent parse, no tools),
-  `teams_consumer.py` (polls `teams_inbox`, confirm-before-spend). User wires Power Automate flows.
+- **Phase 3 — Teams daemon-side ✅** (+ adversarial-review hardening): HTTP endpoint
+  (`/enqueue` + `/callback/key` BOTH secret-guarded with `hmac.compare_digest`, fail-closed;
+  `/health`), `teams.py` cards + post-to-flow (failure path scrubs the signed URL),
+  `dispatcher.py` (claude -p intent parse, strict no-tools: `--tools "" --strict-mcp-config`
+  + scrubbed env; untrusted output type-guarded), `teams_consumer.py` (polls `teams_inbox`,
+  confirm-before-spend gate is exact-`True`, poison rows dead-letter via `attempts`/`last_error`
+  after `teams_inbox_max_attempts`, network/parse done outside DB txns). Orchestrator `claude -p`
+  also moved to allowlist + `--strict-mcp-config` (rep) / `--tools ""` (report). Migration 0003
+  adds `teams_inbox.attempts`/`last_error`. User wires Power Automate flows.
 
 ## Next
 - **Phase 4 — discovery**: OpenRouter `/models` sync + new-model SQL join + dedup ledger +

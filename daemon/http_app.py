@@ -1,17 +1,20 @@
 """Daemon HTTP endpoint (control + key ingest).
 
-Bind to 127.0.0.1. Only /callback/key is meant to be exposed via a dev tunnel, and it requires
-a shared-secret header because the tunnel exposes it. Request bodies are NEVER logged (they can
-contain a key), and the key value is never echoed back.
+Bind to 127.0.0.1. A dev tunnel forwards the WHOLE port (not one path), so every route must
+defend itself: both /enqueue and /callback/key require the X-Kelp-Secret shared secret and fail
+CLOSED when the secret is unset. Request bodies are NEVER logged (they can contain a key), and
+the key value is never echoed back.
 
 Routes:
-  GET  /health           -> {"status": "ok"}
-  POST /enqueue          -> {model, source?, decided_by?}  -> candidate(queued)
-  POST /callback/key     -> {provider, key, model?} + header X-Kelp-Secret  -> keys.json
+  GET  /health           -> {"status": "ok"}                         (no secret)
+  POST /enqueue          -> {model, source?, decided_by?}            -> candidate(queued)
+  POST /callback/key     -> {provider, key, model?}                  -> keys.json
+                            both POSTs require header X-Kelp-Secret
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,17 +38,33 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args) -> None:  # silence: never log bodies (may carry a key)
         pass
 
+    def _authorized(self) -> bool:
+        """Constant-time shared-secret check; fail closed when no secret is configured."""
+        expected = settings.key_ingest_secret or ""
+        if not expected:
+            return False
+        provided = self.headers.get("X-Kelp-Secret") or ""
+        return hmac.compare_digest(provided.encode(), expected.encode())
+
     def _read_json(self) -> dict | None:
-        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            self._send(400, {"error": "invalid content-length"})
+            return None
         if length > _MAX_BODY:
             self._send(413, {"error": "payload too large"})
             return None
         raw = self.rfile.read(length) if length else b"{}"
         try:
-            return json.loads(raw or b"{}")
+            data = json.loads(raw or b"{}")
         except json.JSONDecodeError:
             self._send(400, {"error": "invalid json"})
             return None
+        if not isinstance(data, dict):
+            self._send(400, {"error": "body must be a json object"})
+            return None
+        return data
 
     def do_GET(self) -> None:
         if self.path == "/health":
@@ -54,41 +73,52 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        if self.path == "/enqueue":
-            data = self._read_json()
-            if data is None:
-                return
-            slug = data.get("model")
-            if not slug:
-                self._send(400, {"error": "model required"})
-                return
-            with connect() as c:
-                repo.upsert_candidate(
-                    c, slug=slug, source=data.get("source", "teams"), status="queued",
-                    decided_by=data.get("decided_by"),
-                )
-            self._send(200, {"queued": slug})
+        try:
+            if self.path == "/enqueue":
+                if not self._authorized():
+                    self._send(401, {"error": "unauthorized"})
+                    return
+                data = self._read_json()
+                if data is None:
+                    return
+                slug = data.get("model")
+                if not slug or not isinstance(slug, str):
+                    self._send(400, {"error": "model required"})
+                    return
+                with connect() as c:
+                    repo.upsert_candidate(
+                        c, slug=slug, source=data.get("source", "teams"), status="queued",
+                        decided_by=data.get("decided_by"),
+                    )
+                self._send(200, {"queued": slug})
 
-        elif self.path == "/callback/key":
-            # Shared-secret guard (the tunnel exposes this route). Closed until configured.
-            secret = self.headers.get("X-Kelp-Secret")
-            if not settings.key_ingest_secret or secret != settings.key_ingest_secret:
-                self._send(401, {"error": "unauthorized"})
-                return
-            data = self._read_json()
-            if data is None:
-                return
-            provider, key = data.get("provider"), data.get("key")
-            if not provider or not key:
-                self._send(400, {"error": "provider and key required"})
-                return
-            set_key(provider, key, model=data.get("model"))
-            self._send(200, {"stored": provider})  # never echo the key
-        else:
-            self._send(404, {"error": "not found"})
+            elif self.path == "/callback/key":
+                if not self._authorized():
+                    self._send(401, {"error": "unauthorized"})
+                    return
+                data = self._read_json()
+                if data is None:
+                    return
+                provider, key = data.get("provider"), data.get("key")
+                if not provider or not key:
+                    self._send(400, {"error": "provider and key required"})
+                    return
+                set_key(provider, key, model=data.get("model"))
+                self._send(200, {"stored": provider})  # never echo the key
+            else:
+                self._send(404, {"error": "not found"})
+        except Exception:
+            # Always return JSON; never leak a traceback or partial body to the wire.
+            try:
+                self._send(500, {"error": "internal error"})
+            except Exception:
+                pass
 
 
 def serve() -> None:
+    if settings.http_host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"[http] WARNING: binding to non-loopback {settings.http_host!r}; both POST routes "
+              "are secret-gated, but ensure KEY_INGEST_SECRET is strong.")
     srv = ThreadingHTTPServer((settings.http_host, settings.http_port), Handler)
     print(f"[http] listening on {settings.http_host}:{settings.http_port}")
     srv.serve_forever()

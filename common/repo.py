@@ -279,12 +279,14 @@ def upsert_candidate(
 
 def set_candidate_status(
     conn: psycopg.Connection, slug: str, status: str, decided_by: str | None = None
-) -> None:
-    conn.execute(
+) -> int:
+    """Returns the number of rows updated (0 = no such candidate slug)."""
+    cur = conn.execute(
         "UPDATE candidates SET status=%s, decided_by=COALESCE(%s, decided_by), "
         "decided_at=CASE WHEN %s::text IS NOT NULL THEN now() ELSE decided_at END WHERE slug=%s",
         (status, decided_by, decided_by, slug),
     )
+    return cur.rowcount
 
 
 def get_candidate(conn: psycopg.Connection, slug: str) -> dict | None:
@@ -300,11 +302,17 @@ def list_candidates(conn: psycopg.Connection, status: str | None = None) -> list
 
 
 def search_openrouter(conn: psycopg.Connection, query: str, limit: int = 10) -> list[dict]:
-    """Fuzzy name/slug match over the OpenRouter catalog (the sole discovery radar)."""
-    like = f"%{query.lower()}%"
+    """Fuzzy name/slug match over the OpenRouter catalog (the sole discovery radar).
+
+    The query is a bound parameter (no SQL injection); we additionally escape LIKE
+    metacharacters so a user typing %/_ can't turn the search into a wildcard over-match.
+    """
+    esc = query.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"%{esc}%"
     return conn.execute(
-        "SELECT slug, name, context_length FROM openrouter_models "
-        "WHERE lower(slug) LIKE %s OR lower(name) LIKE %s ORDER BY slug LIMIT %s",
+        r"SELECT slug, name, context_length FROM openrouter_models "
+        r"WHERE lower(slug) LIKE %s ESCAPE '\' OR lower(name) LIKE %s ESCAPE '\' "
+        r"ORDER BY slug LIMIT %s",
         (like, like, limit),
     ).fetchall()
 
@@ -327,8 +335,24 @@ def get_unprocessed_inbox(conn: psycopg.Connection, limit: int = 50) -> list[dic
     ).fetchall()
 
 
-def mark_inbox_processed(conn: psycopg.Connection, inbox_id: int) -> None:
-    conn.execute("UPDATE teams_inbox SET processed_at=now() WHERE id=%s", (inbox_id,))
+def mark_inbox_processed(
+    conn: psycopg.Connection, inbox_id: int, error: str | None = None
+) -> None:
+    """Terminal: row will not be re-selected. `error` set when dead-lettering a bad row."""
+    conn.execute(
+        "UPDATE teams_inbox SET processed_at=now(), last_error=%s WHERE id=%s",
+        (error, inbox_id),
+    )
+
+
+def bump_inbox_attempt(conn: psycopg.Connection, inbox_id: int, error: str | None) -> int:
+    """Record a transient failure; returns the new attempts count (caller dead-letters at N)."""
+    row = conn.execute(
+        "UPDATE teams_inbox SET attempts = attempts + 1, last_error=%s WHERE id=%s "
+        "RETURNING attempts",
+        (error, inbox_id),
+    ).fetchone()
+    return row["attempts"] if row else 0
 
 
 def list_use_cases(conn: psycopg.Connection) -> list[str]:

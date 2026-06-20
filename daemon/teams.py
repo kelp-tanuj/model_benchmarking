@@ -31,8 +31,9 @@ def post(kind: str, target: str, text: str, card: dict | None = None) -> dict:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return {"posted": True, "status": resp.status}
     except Exception as exc:  # never raise into the daemon loop over a Teams hiccup
-        print(f"[teams] post failed: {exc}")
-        return {"posted": False, "error": str(exc)}
+        # Log only the exception TYPE — str(exc) can embed the signed flow URL (a credential).
+        print(f"[teams] post failed ({type(exc).__name__})")
+        return {"posted": False, "error": type(exc).__name__}
 
 
 def _card(title: str, body: list, actions: list | None = None) -> dict:

@@ -28,6 +28,7 @@ from harness.types import ItemScore
 from harness.usecase import validate
 
 ROOT = Path(__file__).resolve().parent.parent
+EMPTY_MCP = str(ROOT / "daemon" / "empty_mcp.json")  # {"mcpServers": {}} — companion for --strict-mcp-config
 TOOLS = [
     "get_use_case_skill", "get_golden_set", "measured_candidate_call",
     "score_deterministic", "get_results", "write_item_scores",
@@ -103,12 +104,16 @@ def _mcp_config(provider: str | None, model: str | None, mock: bool) -> str:
 
 def _claude(prompt: str, *, mcp_config: str | None, allowed: str | None, max_turns: int,
             timeout: int) -> dict:
+    # Allowlist posture (not just the denylist): --strict-mcp-config + a companion config means
+    # only the kelp server (or none, for the report) ever loads — no global/project MCP tools.
+    # With no MCP allowlist requested (the report call), --tools "" disables ALL built-in tools.
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", settings.judge_model,
-           "--max-turns", str(max_turns), "--disallowedTools", DENY_TOOLS]
-    if mcp_config:
-        cmd += ["--mcp-config", mcp_config]
+           "--max-turns", str(max_turns), "--disallowedTools", DENY_TOOLS,
+           "--strict-mcp-config", "--mcp-config", mcp_config or EMPTY_MCP]
     if allowed:
         cmd += ["--allowedTools", allowed]
+    else:
+        cmd += ["--tools", ""]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT),
                               env=dict(os.environ), timeout=timeout)

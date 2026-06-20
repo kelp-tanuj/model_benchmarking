@@ -12,10 +12,16 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from common.config import settings
+
+# The key store is mutated from the ThreadingHTTPServer (/callback/key) and read elsewhere.
+# Serialize every read-modify-write so two concurrent ingests can't clobber the file.
+_LOCK = threading.RLock()
 
 
 def _path() -> Path:
@@ -30,9 +36,21 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
+    """Crash-atomic write: temp file in the same dir (mode 600), then os.replace()."""
     p = _path()
-    p.write_text(json.dumps(data, indent=2))
-    os.chmod(p, 0o600)  # owner read/write only
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".keys-", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)  # owner read/write only, before any bytes hit disk
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, p)  # atomic on POSIX; never leaves a truncated keys.json
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _now() -> str:
@@ -41,13 +59,14 @@ def _now() -> str:
 
 def get_key(provider: str) -> str | None:
     """Return the stored key for a provider, or None. Updates last_used as a side effect."""
-    data = _load()
-    entry = data.get(provider)
-    if not entry:
-        return None
-    entry["last_used"] = _now()
-    _save(data)
-    return entry["key"]
+    with _LOCK:
+        data = _load()
+        entry = data.get(provider)
+        if not entry:
+            return None
+        entry["last_used"] = _now()
+        _save(data)
+        return entry["key"]
 
 
 def get_model(provider: str) -> str | None:
@@ -55,25 +74,27 @@ def get_model(provider: str) -> str | None:
 
 
 def set_key(provider: str, key: str, model: str | None = None, expiry: str | None = None) -> None:
-    data = _load()
-    existing = data.get(provider, {})
-    data[provider] = {
-        "key": key,
-        "model": model if model is not None else existing.get("model"),
-        "created": existing.get("created", _now()),
-        "last_used": existing.get("last_used"),
-        "expiry": expiry if expiry is not None else existing.get("expiry"),
-    }
-    _save(data)
+    with _LOCK:
+        data = _load()
+        existing = data.get(provider, {})
+        data[provider] = {
+            "key": key,
+            "model": model if model is not None else existing.get("model"),
+            "created": existing.get("created", _now()),
+            "last_used": existing.get("last_used"),
+            "expiry": expiry if expiry is not None else existing.get("expiry"),
+        }
+        _save(data)
 
 
 def revoke(provider: str) -> bool:
-    data = _load()
-    if provider in data:
-        del data[provider]
-        _save(data)
-        return True
-    return False
+    with _LOCK:
+        data = _load()
+        if provider in data:
+            del data[provider]
+            _save(data)
+            return True
+        return False
 
 
 def is_expired(provider: str) -> bool:
