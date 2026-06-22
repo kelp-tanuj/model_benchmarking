@@ -19,10 +19,10 @@ from pathlib import Path
 from common import repo
 from common.config import settings
 from common.db import connect
-from common.keys import get_key
 from common.leaderboard import format_cell
 from daemon import teams
 from daemon.orchestrator import run_benchmark, run_report
+from daemon.resolver import resolve_candidate
 
 ROOT = Path(__file__).resolve().parent.parent
 USECASES_DIR = ROOT / "usecases"
@@ -35,18 +35,6 @@ def _disk_use_cases() -> list[str]:
         d.name for d in USECASES_DIR.iterdir()
         if d.is_dir() and (d / f"{d.name}.md").exists()
     )
-
-
-def resolve_route(slug: str) -> dict | None:
-    """Naive v1 provider resolution: `vendor/model` -> provider=vendor, model=model, native.
-
-    Returns None when no key is stored for the provider (caller marks the candidate `pending`).
-    Phase 5 replaces this with Foundry presence-check -> native/HF -> defer + model_aliases."""
-    provider = slug.split("/")[0] if "/" in slug else slug
-    model = slug.split("/", 1)[1] if "/" in slug else slug
-    if not get_key(provider):
-        return None
-    return {"provider": provider, "model": model, "route": "native"}
 
 
 def _n_reps(use_case: str) -> int:
@@ -65,10 +53,10 @@ def _summary_lines(summary: dict) -> list[str]:
 
 def process_candidate(cand: dict, *, mock: bool = False) -> dict:
     slug = cand["slug"]
-    route = resolve_route(slug)
+    res = resolve_candidate(slug)
 
-    if route is None:  # blocked on a missing provider key
-        provider = slug.split("/")[0] if "/" in slug else slug
+    if res["status"] == "pending":  # known provider, just missing a key
+        provider = res["provider"]
         with connect() as c:
             repo.set_candidate_status(c, slug, "pending", decided_by="worker")
             repo.log(c, benchmark_id=None, run_id=None, level="warning", event="worker_blocked",
@@ -76,14 +64,24 @@ def process_candidate(cand: dict, *, mock: bool = False) -> dict:
         teams.post("key_request", "chat",
                    f"Need an API key for provider '{provider}' to benchmark {slug}.",
                    card=teams.key_request_card(provider))
-        return {"slug": slug, "status": "pending", "reason": "no key"}
+        return {"slug": slug, "status": "pending", "reason": f"no key for {provider}"}
 
+    if res["status"] == "deferred":  # no callable route (unknown vendor / no native API)
+        with connect() as c:
+            repo.set_candidate_status(c, slug, "deferred", decided_by="worker")
+            repo.log(c, benchmark_id=None, run_id=None, level="warning", event="worker_deferred",
+                     detail={"slug": slug, "reason": f"no route (provider guess '{res['provider']}')"})
+        teams.post("alert", "channel", f"Can't route {slug} — marked deferred.",
+                   card=teams.alert_card("Model deferred", [f"No callable provider for `{slug}`."]))
+        return {"slug": slug, "status": "deferred"}
+
+    provider, model, route = res["provider"], res["model"], res["route"]
     use_cases = _disk_use_cases()
     results: list[tuple[str, dict]] = []
     for uc in use_cases:
         try:
-            summary = run_benchmark(use_case=uc, slug=slug, provider=route["provider"],
-                                    model=route["model"], route=route["route"],
+            summary = run_benchmark(use_case=uc, slug=slug, provider=provider,
+                                    model=model, route=route,
                                     n_reps=_n_reps(uc), mock=mock)
             try:
                 run_report(summary)  # report is best-effort; a failure here must not fail the run

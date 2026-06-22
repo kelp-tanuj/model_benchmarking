@@ -55,12 +55,21 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   admin/Teams "Benchmark" → queued → auto-run. Provider resolution is naive v1 (vendor/model split
   + key check); phase 5 replaces it. Verified end-to-end (mock run: queued→done→benchmark+report).
 
+- **Phase 5 — provider resolution ✅ (native/HF half):** `daemon/resolver.py::resolve_candidate`
+  resolves a slug in ANY namespace form to `{status, provider, model, route}`: model_aliases
+  bridge → `VENDOR_TO_PROVIDER` map (OpenRouter `google/…`→`gemini`, `moonshotai`→`moonshot`, …)
+  → stored-key match (bare slug == a key's provider or configured model — fixes the
+  `gemini-2.5-flash-lite` no-prefix bug) → pending (known provider, needs key) vs deferred
+  (unroutable). Worker uses it (native→run, pending→key card, deferred→alert). All gemini forms
+  resolve to the one key. Foundry presence-check + a claude -p reconcile for unknown vendors are
+  the remaining Phase-5 follow-ups (Foundry needs Azure creds).
+
 ## Next
-- **Phase 5 — provider resolution** (replace the worker's naive `resolve_route`): Foundry
-  presence-check → native/HF → defer + the `model_aliases` namespace bridge (so OpenRouter
-  `google/…` etc. map to a callable provider/key). Foundry half needs Azure creds.
+- **Foundry presence-check** (Phase 5 remainder) — needs Azure creds; slots into `resolve_candidate`
+  before the native route.
 - **EnrichList use case** — drop in the real `usecases/enrichlist/{enrichlist.md,golden.jsonl}`
   to replace the synthetic fixture (blocked on the files).
+- **Robustness/ops** — stale-`running` reset, retry/backoff, worker heartbeat for admin status.
 
 ## Run commands (from repo root; `.env` has DATABASE_URL)
 - Tests: `uv run pytest -q`

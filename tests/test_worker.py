@@ -1,21 +1,9 @@
-from common.config import settings
 from harness.types import Aggregate
 
 
 def test_disk_use_cases_includes_fixture():
     from daemon import worker
     assert "fixture_qa" in worker._disk_use_cases()
-
-
-def test_resolve_route(monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, "keys_path", str(tmp_path / "keys.json"))
-    import common.keys as keys
-    keys.set_key("gemini", "k", model="gemini-2.5-flash-lite")
-    from daemon import worker
-    assert worker.resolve_route("gemini/gemini-2.5-flash-lite") == {
-        "provider": "gemini", "model": "gemini-2.5-flash-lite", "route": "native"}
-    # no key for this provider -> unresolved (caller marks the candidate 'pending')
-    assert worker.resolve_route("cohere/north-mini-code-1.0") is None
 
 
 def test_summary_lines_includes_metrics_and_drift():
