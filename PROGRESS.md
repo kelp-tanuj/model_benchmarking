@@ -1,6 +1,15 @@
 # Kelp Benchmark — Build Progress
 
-Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full design + decisions).
+Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full design + decisions,
+incl. **Addendum v1.1** = web discovery radar).
+
+**Current state (all committed + pushed to origin/main):** the full v1 loop is built + verified —
+two discovery radars (OpenRouter sync + `claude -p` web research) → human gate (admin console) →
+worker auto-runs queued candidates → scores/drift/report → leaderboard + Teams summary. Phase 5
+native/HF provider resolution + the robustness pass (heartbeat, stale-reset, retry/backoff, retry
+button) are done. 73 tests pass. **Remaining:** Foundry presence-check (needs Azure creds),
+EnrichList real use case (needs the files), `claude -p` judge auto-resume on Max rate-limits.
+**Immediate next:** take-it-for-a-spin, or unblock Foundry/EnrichList.
 
 ## Status (phases done + pushed to origin/main)
 - **Phase 1 — eval loop ✅**: `claude -p` orchestrates a rep over the golden set via 6 stdio-MCP
@@ -52,8 +61,10 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   atomically claims one (queued→running, `repo.claim_queued_candidate`), resolves provider/route,
   runs every on-disk use case via `run_benchmark` + `run_report`, sets done/failed (or `pending`
   + a key-request card when the provider has no key), posts a Teams summary. Closes the loop:
-  admin/Teams "Benchmark" → queued → auto-run. Provider resolution is naive v1 (vendor/model split
-  + key check); phase 5 replaces it. Verified end-to-end (mock run: queued→done→benchmark+report).
+  admin/Teams "Benchmark" → queued → auto-run. Provider resolution via `daemon/resolver.py`
+  (Phase 5, below). On startup `repo.reset_stale_running` clears orphaned 'running' rows from a
+  killed worker; a daemon-thread heartbeat (`daemon_status`, migration 0006) feeds the admin
+  **Worker** tile. Verified end-to-end (mock run + a real gemini run, both queued→done).
 
 - **Phase 5 — provider resolution ✅ (native/HF half):** `daemon/resolver.py::resolve_candidate`
   resolves a slug in ANY namespace form to `{status, provider, model, route}`: model_aliases
@@ -95,12 +106,23 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
 - `keys.json` (gitignored, 600): provider keys via `uv run python -m common.keys set-file <provider> <file> <model>`.
 
 ## Constraints (also in agent memory)
-- **No web search** anywhere (no quota): candidate calls have no tools; every `claude -p` call
-  passes `--disallowedTools WebSearch,WebFetch,...` (+ fs/shell denied).
+- **Web-search scope (clarified — earlier "no web anywhere" was imprecise):** the rule is that
+  *candidate model test calls* never web-search (the measured call passes NO tools) and the
+  eval/judge/report/dispatcher `claude -p` calls are hardened no-web (allowlist +
+  `--strict-mcp-config` + `--tools ""`). `claude -p` as **operator** MAY web-search — the
+  web-discovery radar (`daemon/web_discovery.py`, isolated `kelp_disc` server) deliberately uses
+  WebSearch/WebFetch. The original "no quota" concern was about candidate web-use-cases, not the operator.
 - Billing is **quota-based** (Max subscription), not per-token.
 - Judge is **uncalibrated** — quality scores are a stability gauge, not accuracy.
 
-## User follow-ups to go fully live
-- Power Automate: 4 Workflows + `TEAMS_POST_FLOW_URL` + dev tunnel to `/callback/key`.
-- Azure Foundry creds (subscription id, location, ARM token) for the presence-check catalog.
+## Operational notes / user follow-ups
+- **Teams: OUTBOUND is LIVE** (`TEAMS_POST_FLOW_URL` set; posts to a 1:1 Flow-bot chat). **INBOUND
+  is blocked by premium Power Automate** (HTTP + Postgres connectors are premium) → the **admin
+  console is the control surface**; the daemon `/inbox` route + `teams_consumer` are built and wait
+  for premium PA or a Graph app-registration. (Dev tunnels fought the network: cloudflared needs
+  `--protocol http2`; ngrok worked. Not needed unless wiring inbound.)
+- **To run the system now:** admin console + worker (that's the core). Optional: user leaderboard
+  (`--server.port 8502`), scheduler. Do NOT run http_app/ngrok/consumer (inbound, premium-blocked).
+- **No `python` on PATH** — always `uv run python`.
+- Azure Foundry creds (subscription id, location, ARM token) for the presence-check catalog (Phase 5 remainder).
 - EnrichList use-case MD + `usecases/enrichlist/golden.jsonl` to replace the synthetic fixture.
