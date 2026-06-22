@@ -15,9 +15,27 @@ import time
 from typing import Any
 
 import litellm
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from common.keys import get_key, get_model
 from harness.types import MeasuredResult
+
+# Transient provider failures worth retrying (rate limit / timeout / connection / 5xx).
+# Auth/4xx (AuthenticationError, BadRequestError) are NOT retryable and propagate immediately.
+_RETRYABLE = tuple(
+    e for e in (
+        getattr(litellm, "RateLimitError", None),
+        getattr(litellm, "Timeout", None),
+        getattr(litellm, "APIConnectionError", None),
+        getattr(litellm, "InternalServerError", None),
+        getattr(litellm, "ServiceUnavailableError", None),
+    ) if e is not None
+) or (Exception,)
 
 
 class LiteLLMCandidateCaller:
@@ -40,10 +58,15 @@ class LiteLLMCandidateCaller:
     def _model_str(self) -> str:
         return self.model if "/" in self.model else f"{self.provider}/{self.model}"
 
-    def call(self, input_id: str, request: dict) -> MeasuredResult:
-        messages = request["messages"]
-        temperature = request.get("temperature", self.temperature)
-
+    @retry(
+        retry=retry_if_exception_type(_RETRYABLE),
+        wait=wait_random_exponential(multiplier=2, max=60),  # exp backoff w/ jitter, cap 60s
+        stop=stop_after_attempt(6),
+        reraise=True,
+    )
+    def _timed_completion(self, messages: list, temperature: float):
+        """One timed round-trip. Timing is INSIDE each attempt, so the reported latency is the
+        successful attempt's round-trip — backoff sleeps between retries are never counted."""
         t0 = time.perf_counter()
         resp = litellm.completion(
             model=self._model_str(),
@@ -52,7 +75,13 @@ class LiteLLMCandidateCaller:
             api_key=self._api_key,
             # No `tools` — plain completion only (no web search).
         )
-        latency_ms = (time.perf_counter() - t0) * 1000.0
+        return resp, (time.perf_counter() - t0) * 1000.0
+
+    def call(self, input_id: str, request: dict) -> MeasuredResult:
+        messages = request["messages"]
+        temperature = request.get("temperature", self.temperature)
+
+        resp, latency_ms = self._timed_completion(messages, temperature)
 
         output = resp.choices[0].message.content or ""
         usage = getattr(resp, "usage", None)

@@ -106,14 +106,15 @@ with tab_queue:
     else:
         st.info("No candidates yet. Discovered models and manual requests show up here.")
 
-    st.markdown("**Decide on discovered / pending models**")
-    actionable = [x for x in cands if x["status"] in ("discovered", "pending", "deferred")]
+    st.markdown("**Decide on discovered / pending / failed models**")
+    actionable = [x for x in cands if x["status"] in ("discovered", "pending", "deferred", "failed")]
     if not actionable:
         st.caption("Nothing awaiting a decision.")
     for x in actionable:
         col_a, col_b, col_c = st.columns([3, 1, 1])
         col_a.write(f"`{x['slug']}`  ·  *{x['status']}*  ·  {x['source']}")
-        if col_b.button("Benchmark", key=f"bench_{x['slug']}"):
+        label = "Retry" if x["status"] == "failed" else "Benchmark"
+        if col_b.button(label, key=f"bench_{x['slug']}"):
             with connect() as c:
                 repo.set_candidate_status(c, x["slug"], "queued", decided_by="admin")
             st.success(f"Queued {x['slug']}")
@@ -244,10 +245,11 @@ with tab_disc:
             use_container_width=True, hide_index=True,
         )
         st.markdown("**Decide on web-discovered models**")
-        for d in [x for x in intel if x["status"] in ("discovered", "pending")]:
+        for d in [x for x in intel if x["status"] in ("discovered", "pending", "failed")]:
             ca, cb, cc = st.columns([3, 1, 1])
             ca.write(f"`{d['slug']}` — {d['canonical_name']} ({d['provider'] or '?'})")
-            if cb.button("Benchmark", key=f"webbench_{d['slug']}"):
+            if cb.button("Retry" if d["status"] == "failed" else "Benchmark",
+                         key=f"webbench_{d['slug']}"):
                 with connect() as c:
                     repo.set_candidate_status(c, d["slug"], "queued", decided_by="admin")
                 st.rerun()

@@ -69,10 +69,12 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   before the native route.
 - **EnrichList use case** — drop in the real `usecases/enrichlist/{enrichlist.md,golden.jsonl}`
   to replace the synthetic fixture (blocked on the files).
-- **Robustness/ops** — retry/backoff on rate limits + a "retry" action for failed candidates.
-  (Done: worker heartbeat → admin **Worker** tile; "HTTP (Teams inbound)" relabel; admin 🔄 Refresh
-  button; **stale-`running` reset** — `repo.reset_stale_running` runs on worker startup to fail
-  orphaned benchmarks/runs + re-queue orphaned candidates from a killed worker.)
+- **Robustness/ops ✅** — worker heartbeat → admin **Worker** tile; "HTTP (Teams inbound)" relabel;
+  admin 🔄 Refresh button; **stale-`running` reset** (`repo.reset_stale_running` on worker startup);
+  **retry/backoff** on the measured provider call (tenacity: rate-limit/timeout/5xx, exp backoff +
+  jitter cap 60s, 6 attempts, timed per-attempt so latency isn't polluted; auth/4xx fail fast);
+  **Retry** button for `failed` candidates in the admin Queue + web-intel sections. Remaining
+  follow-up: `claude -p` judge auto-resume on Max rate-limits (needs reliable envelope detection).
 
 ## Run commands (from repo root; `.env` has DATABASE_URL)
 - Tests: `uv run pytest -q`
