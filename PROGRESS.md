@@ -48,12 +48,19 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   (Sonnet), admin Discovery tab shows intel + Benchmark/Skip + "Run web discovery now". Eval/judge/
   report/dispatcher no-web hardening untouched (regression-tested).
 
+- **Worker loop ✅:** `daemon/worker.py` — single serial worker polls `candidates(status='queued')`,
+  atomically claims one (queued→running, `repo.claim_queued_candidate`), resolves provider/route,
+  runs every on-disk use case via `run_benchmark` + `run_report`, sets done/failed (or `pending`
+  + a key-request card when the provider has no key), posts a Teams summary. Closes the loop:
+  admin/Teams "Benchmark" → queued → auto-run. Provider resolution is naive v1 (vendor/model split
+  + key check); phase 5 replaces it. Verified end-to-end (mock run: queued→done→benchmark+report).
+
 ## Next
-- **Worker loop** — a daemon that polls `candidates(status='queued')` and runs them through
-  `run_benchmark` (the admin "Enqueue"/"Benchmark" currently writes the queue; the auto-runner
-  + provider resolution are the missing link to a fully hands-off loop).
-- **Phase 5 — provider resolution** (Foundry presence-check → native/HF → defer) + Foundry
-  catalog sync (needs Azure creds) + `model_aliases` namespace bridge + more use cases.
+- **Phase 5 — provider resolution** (replace the worker's naive `resolve_route`): Foundry
+  presence-check → native/HF → defer + the `model_aliases` namespace bridge (so OpenRouter
+  `google/…` etc. map to a callable provider/key). Foundry half needs Azure creds.
+- **EnrichList use case** — drop in the real `usecases/enrichlist/{enrichlist.md,golden.jsonl}`
+  to replace the synthetic fixture (blocked on the files).
 
 ## Run commands (from repo root; `.env` has DATABASE_URL)
 - Tests: `uv run pytest -q`
@@ -62,6 +69,7 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
 - Drift: `uv run python -m daemon.drift_runner --use-case fixture_qa`
 - Discovery sync: `uv run python -m daemon.discovery` (live) · `--fixture <json>` (offline) · `--no-cards`
 - Web discovery: `uv run python -m daemon.web_discovery --target 2 --max-turns 8 --no-cards` (claude -p WebSearch)
+- Worker (runs the queue): `uv run python -m daemon.worker` · `--once` · `--once --mock`
 - Scheduler: `uv run python -m daemon.scheduler --list`
 - HTTP endpoint: `uv run python -m daemon.http_app`   ·   Consumer: `uv run python -m daemon.teams_consumer`
 - Leaderboard (user): `uv run streamlit run apps/user/app.py`

@@ -293,6 +293,21 @@ def get_candidate(conn: psycopg.Connection, slug: str) -> dict | None:
     return conn.execute("SELECT * FROM candidates WHERE slug=%s", (slug,)).fetchone()
 
 
+def claim_queued_candidate(conn: psycopg.Connection) -> dict | None:
+    """Atomically claim the oldest queued candidate (queued -> running). None if queue empty.
+
+    The single serial worker means no contention, but the atomic UPDATE...RETURNING is correct
+    even if two workers ever raced."""
+    return conn.execute(
+        """
+        UPDATE candidates SET status='running'
+        WHERE slug = (SELECT slug FROM candidates WHERE status='queued'
+                      ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+        RETURNING *
+        """
+    ).fetchone()
+
+
 def list_candidates(conn: psycopg.Connection, status: str | None = None) -> list[dict]:
     if status:
         return conn.execute(

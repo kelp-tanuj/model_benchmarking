@@ -51,5 +51,8 @@ class Settings(BaseSettings):
     teams_poll_seconds: int = 10
     teams_inbox_max_attempts: int = 5  # dead-letter an inbox row after this many transient failures
 
+    # --- Worker (serial benchmark runner) ---
+    worker_poll_seconds: int = 15
+
 
 settings = Settings()
