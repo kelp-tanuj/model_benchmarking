@@ -29,9 +29,22 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   **Live catalog populated: 340 real models.** Foundry presence-check catalog is the remaining
   half — blocked on Azure creds.
 
+- **Teams + admin console ✅ (this milestone):** Outbound Teams is LIVE — daemon → Power
+  Automate "When a Teams webhook request is received" flow → adaptive card in a 1:1 Flow-bot
+  chat (verified end-to-end). Inbound interactive cards need premium Power Automate (the HTTP +
+  Postgres connectors are both premium), so the **admin Streamlit console** (`apps/admin/app.py`,
+  loopback-only) is the human-in-the-loop surface: candidate queue with Benchmark/Skip, manual
+  enqueue, masked key entry/revoke, trigger discovery sync, benchmark monitor + drill-down,
+  baseline config, run logs. The daemon inbound code (`/inbox` route + consumer) is built,
+  tested through ngrok, and waits ready for the day premium PA or a Graph app-registration lands.
+  Migration 0004 allows `candidates.source='admin'`.
+
 ## Next
+- **Worker loop** — a daemon that polls `candidates(status='queued')` and runs them through
+  `run_benchmark` (the admin "Enqueue"/"Benchmark" currently writes the queue; the auto-runner
+  + provider resolution are the missing link to a fully hands-off loop).
 - **Phase 5 — provider resolution** (Foundry presence-check → native/HF → defer) + Foundry
-  catalog sync (needs Azure creds) + generalize to more use cases.
+  catalog sync (needs Azure creds) + `model_aliases` namespace bridge + more use cases.
 
 ## Run commands (from repo root; `.env` has DATABASE_URL)
 - Tests: `uv run pytest -q`
@@ -41,7 +54,9 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
 - Discovery sync: `uv run python -m daemon.discovery` (live) · `--fixture <json>` (offline) · `--no-cards`
 - Scheduler: `uv run python -m daemon.scheduler --list`
 - HTTP endpoint: `uv run python -m daemon.http_app`   ·   Consumer: `uv run python -m daemon.teams_consumer`
-- Leaderboard: `uv run streamlit run apps/user/app.py`
+- Leaderboard (user): `uv run streamlit run apps/user/app.py`
+- Admin console: `uv run streamlit run apps/admin/app.py --server.address 127.0.0.1`
+- Teams test post: `uv run python -c "from daemon import teams; teams.post('summary','chat','test', card=teams.summary_card('m','uc',['hi']))"`
 
 ## Secrets / config (never commit)
 - `.env` (gitignored): `DATABASE_URL` (Neon), `TEAMS_POST_FLOW_URL`, `KEY_INGEST_SECRET`.

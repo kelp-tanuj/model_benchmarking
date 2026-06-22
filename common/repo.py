@@ -453,6 +453,43 @@ def get_benchmarks(conn: psycopg.Connection, use_case: str) -> list[dict]:
     ).fetchall()
 
 
+# --- Admin monitoring reads ----------------------------------------------------------
+
+def get_recent_benchmarks(conn: psycopg.Connection, limit: int = 50) -> list[dict]:
+    """All benchmarks (any status, incl. running/failed/drift) for the admin monitor."""
+    return conn.execute(
+        """
+        SELECT benchmark_id, slug, use_case, provider, route, status, is_baseline, is_drift,
+               n_reps, started_at, finished_at
+        FROM benchmarks ORDER BY started_at DESC LIMIT %s
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def get_runs(conn: psycopg.Connection, benchmark_id: int) -> list[dict]:
+    return conn.execute(
+        "SELECT run_id, rep_index, status, started_at, finished_at FROM runs "
+        "WHERE benchmark_id=%s ORDER BY rep_index",
+        (benchmark_id,),
+    ).fetchall()
+
+
+def get_recent_logs(conn: psycopg.Connection, limit: int = 100) -> list[dict]:
+    return conn.execute(
+        "SELECT ts, level, event, benchmark_id, run_id, detail FROM run_logs "
+        "ORDER BY ts DESC LIMIT %s",
+        (limit,),
+    ).fetchall()
+
+
+def get_catalog_status(conn: psycopg.Connection) -> dict:
+    return conn.execute(
+        "SELECT count(*) AS n, max(last_seen) AS last_sync, max(first_seen) AS newest "
+        "FROM openrouter_models"
+    ).fetchone()
+
+
 def get_scores_for_use_case(conn: psycopg.Connection, use_case: str) -> list[dict]:
     return conn.execute(
         "SELECT benchmark_id, metric, mean, min, max FROM scores WHERE use_case=%s",
