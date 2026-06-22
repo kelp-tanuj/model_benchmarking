@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sys
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,12 +45,25 @@ def _disk_use_cases() -> list[str]:
 
 
 def _daemon_health() -> str:
+    """Pings the OPTIONAL Teams-inbound HTTP server (only run when wiring Teams inbound)."""
     url = f"http://{settings.http_host}:{settings.http_port}/health"
     try:
         with urllib.request.urlopen(url, timeout=2) as r:
             return "🟢 up" if r.status == 200 else f"🟠 http {r.status}"
     except Exception:
-        return "🔴 not reachable"
+        return "🔴 off"
+
+
+def _worker_status() -> str:
+    """The thing that actually runs benchmarks — alive if it beat within ~3 poll intervals."""
+    with connect() as c:
+        hb = repo.get_heartbeat(c, "worker")
+    if not hb:
+        return "⚪ never run"
+    age = (datetime.now(timezone.utc) - hb["last_beat"]).total_seconds()
+    if age <= 3 * settings.worker_poll_seconds:
+        return f"🟢 {(hb['detail'] or {}).get('current', 'idle')}"
+    return f"🔴 stale {int(age)}s"
 
 
 # --- Overview bar --------------------------------------------------------------------
@@ -63,12 +77,13 @@ for cand in cands:
     status_counts[cand["status"]] = status_counts.get(cand["status"], 0) + 1
 running = [b for b in benches if b["status"] == "running"]
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Daemon HTTP", _daemon_health())
-c2.metric("Catalog models", catalog["n"] if catalog else 0)
-c3.metric("Queued", status_counts.get("queued", 0))
-c4.metric("Discovered", status_counts.get("discovered", 0))
-c5.metric("Running now", len(running))
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Worker", _worker_status())
+c2.metric("HTTP (Teams inbound)", _daemon_health())
+c3.metric("Catalog models", catalog["n"] if catalog else 0)
+c4.metric("Queued", status_counts.get("queued", 0))
+c5.metric("Discovered", status_counts.get("discovered", 0))
+c6.metric("Running now", len(running))
 
 tab_queue, tab_keys, tab_disc, tab_bench, tab_base, tab_logs = st.tabs(
     ["Queue", "Keys", "Discovery", "Benchmarks", "Baselines", "Logs"]

@@ -13,6 +13,7 @@ Run:  uv run python -m daemon.worker            # continuous loop
 from __future__ import annotations
 
 import argparse
+import threading
 import time
 from pathlib import Path
 
@@ -26,6 +27,8 @@ from daemon.resolver import resolve_candidate
 
 ROOT = Path(__file__).resolve().parent.parent
 USECASES_DIR = ROOT / "usecases"
+
+_current = "idle"  # what the worker is doing now (surfaced via the heartbeat)
 
 
 def _disk_use_cases() -> list[str]:
@@ -110,14 +113,31 @@ def process_candidate(cand: dict, *, mock: bool = False) -> dict:
 
 def run_once(*, mock: bool = False) -> dict | None:
     """Claim + process one candidate. Returns None when the queue is empty."""
+    global _current
     with connect() as c:
         cand = repo.claim_queued_candidate(c)
     if not cand:
         return None
-    print(f"[worker] claimed {cand['slug']} (source={cand['source']})")
-    res = process_candidate(cand, mock=mock)
-    print(f"[worker] {cand['slug']} -> {res['status']}")
-    return res
+    _current = f"running {cand['slug']}"
+    try:
+        print(f"[worker] claimed {cand['slug']} (source={cand['source']})")
+        res = process_candidate(cand, mock=mock)
+        print(f"[worker] {cand['slug']} -> {res['status']}")
+        return res
+    finally:
+        _current = "idle"
+
+
+def _heartbeat_loop(stop: threading.Event) -> None:
+    """Beat every poll interval on a daemon thread, so the heartbeat stays fresh even while a
+    long benchmark blocks the main loop inside run_once."""
+    while not stop.is_set():
+        try:
+            with connect() as c:
+                repo.heartbeat(c, "worker", {"current": _current})
+        except Exception:
+            pass
+        stop.wait(settings.worker_poll_seconds)
 
 
 def main() -> None:
@@ -133,6 +153,7 @@ def main() -> None:
         print(f"[worker] processed {n} candidate(s)")
         return
 
+    threading.Thread(target=_heartbeat_loop, args=(threading.Event(),), daemon=True).start()
     print(f"[worker] polling for queued candidates every {settings.worker_poll_seconds}s")
     while True:
         if run_once(mock=args.mock) is None:  # queue empty -> wait; else loop to drain

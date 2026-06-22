@@ -586,6 +586,21 @@ def get_recent_logs(conn: psycopg.Connection, limit: int = 100) -> list[dict]:
     ).fetchall()
 
 
+def heartbeat(conn: psycopg.Connection, name: str, detail: Any | None = None) -> None:
+    """Upsert a liveness beat for a long-running daemon (worker, etc.)."""
+    conn.execute(
+        "INSERT INTO daemon_status (name, last_beat, detail) VALUES (%s, now(), %s) "
+        "ON CONFLICT (name) DO UPDATE SET last_beat=now(), detail=EXCLUDED.detail",
+        (name, Json(detail) if detail is not None else None),
+    )
+
+
+def get_heartbeat(conn: psycopg.Connection, name: str) -> dict | None:
+    return conn.execute(
+        "SELECT name, last_beat, detail FROM daemon_status WHERE name=%s", (name,)
+    ).fetchone()
+
+
 def get_catalog_status(conn: psycopg.Connection) -> dict:
     return conn.execute(
         "SELECT count(*) AS n, max(last_seen) AS last_sync, max(first_seen) AS newest "

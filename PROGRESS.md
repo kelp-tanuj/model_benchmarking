@@ -69,7 +69,9 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   before the native route.
 - **EnrichList use case** — drop in the real `usecases/enrichlist/{enrichlist.md,golden.jsonl}`
   to replace the synthetic fixture (blocked on the files).
-- **Robustness/ops** — stale-`running` reset, retry/backoff, worker heartbeat for admin status.
+- **Robustness/ops** — stale-`running` reset, retry/backoff on rate limits. (Worker heartbeat ✅:
+  `daemon_status` table, worker beats on a daemon thread, admin shows a live **Worker** tile;
+  the old "Daemon HTTP" tile is relabeled "HTTP (Teams inbound)" — it's the optional inbound server.)
 
 ## Run commands (from repo root; `.env` has DATABASE_URL)
 - Tests: `uv run pytest -q`
