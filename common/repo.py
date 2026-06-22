@@ -293,6 +293,25 @@ def get_candidate(conn: psycopg.Connection, slug: str) -> dict | None:
     return conn.execute("SELECT * FROM candidates WHERE slug=%s", (slug,)).fetchone()
 
 
+def reset_stale_running(conn: psycopg.Connection) -> dict:
+    """Single serial worker: on startup, any 'running' benchmark/candidate is orphaned (a prior
+    worker died mid-run). Fail the benchmarks and re-queue the candidates so they re-run."""
+    b = conn.execute(
+        "UPDATE benchmarks SET status='failed', finished_at=now() WHERE status='running' "
+        "RETURNING benchmark_id"
+    ).fetchall()
+    runs = conn.execute(
+        "UPDATE runs SET status='failed', finished_at=now() WHERE status='running' "
+        "RETURNING run_id"
+    ).fetchall()
+    cand = conn.execute(
+        "UPDATE candidates SET status='queued' WHERE status='running' RETURNING slug"
+    ).fetchall()
+    return {"benchmarks_failed": [r["benchmark_id"] for r in b],
+            "runs_failed": [r["run_id"] for r in runs],
+            "candidates_requeued": [r["slug"] for r in cand]}
+
+
 def claim_queued_candidate(conn: psycopg.Connection) -> dict | None:
     """Atomically claim the oldest queued candidate (queued -> running). None if queue empty.
 

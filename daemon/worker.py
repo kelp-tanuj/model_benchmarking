@@ -146,6 +146,14 @@ def main() -> None:
     ap.add_argument("--mock", action="store_true", help="offline measured calls (still judges)")
     args = ap.parse_args()
 
+    # On startup, clear orphaned 'running' state from a previously-killed worker (single serial
+    # worker => nothing is legitimately running yet). Failed benchmarks, re-queued candidates.
+    with connect() as c:
+        reset = repo.reset_stale_running(c)
+    if reset["benchmarks_failed"] or reset["candidates_requeued"]:
+        print(f"[worker] reset stale running -> failed benchmarks {reset['benchmarks_failed']}, "
+              f"re-queued {reset['candidates_requeued']}")
+
     if args.once:
         n = 0
         while run_once(mock=args.mock) is not None:

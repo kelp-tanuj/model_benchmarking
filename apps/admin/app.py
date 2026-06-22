@@ -33,6 +33,8 @@ USECASES_DIR = ROOT / "usecases"
 st.set_page_config(page_title="Kelp Admin", layout="wide")
 st.title("Kelp — Admin Console")
 st.caption("Localhost control surface · physical access = auth · writes keys and enqueues spend.")
+if st.button("🔄 Refresh", help="Re-read live state — the app doesn't auto-poll while a run is in progress"):
+    st.rerun()
 
 
 def _disk_use_cases() -> list[str]:
