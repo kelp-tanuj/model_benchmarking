@@ -16,6 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 from common.config import settings
 from daemon.discovery import sync_openrouter
 from daemon.drift_runner import run_drift, use_cases_with_baseline
+from daemon.web_discovery import run_web_discovery
 
 
 def discovery_all() -> None:
@@ -28,6 +29,17 @@ def discovery_all() -> None:
         print(f"[scheduler] discovery error: {type(exc).__name__}: {exc}")
 
 
+def web_discovery_all() -> None:
+    if not settings.web_discovery_enabled:
+        print("[scheduler] web discovery disabled (web_discovery_enabled=False)")
+        return
+    try:
+        res = run_web_discovery()
+        print(f"[scheduler] web discovery: {len(res['new_slugs'])} new candidate(s)")
+    except Exception as exc:  # never block drift on a web-research failure
+        print(f"[scheduler] web discovery error: {type(exc).__name__}: {exc}")
+
+
 def drift_all() -> None:
     for uc in use_cases_with_baseline():
         try:
@@ -37,8 +49,9 @@ def drift_all() -> None:
 
 
 def nightly() -> None:
-    """The single off-hours sequence: discover new models, then re-benchmark for drift."""
+    """The single off-hours sequence: catalog sync, web-research discovery, then drift."""
     discovery_all()
+    web_discovery_all()
     drift_all()
 
 
@@ -58,7 +71,7 @@ def build_scheduler() -> BlockingScheduler:
         nightly,
         CronTrigger(hour=hour, minute=minute, timezone=settings.timezone),
         id="nightly",
-        name="off-hours discovery sync + drift re-runs",
+        name="off-hours: OpenRouter sync + web discovery + drift re-runs",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

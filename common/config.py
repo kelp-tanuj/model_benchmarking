@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     relevance_min_context: int = 8000
     relevance_max_price_prompt: float | None = None  # off by default
 
+    # --- Web discovery radar (claude -p web research; runs nightly) ---
+    web_discovery_enabled: bool = True
+    web_discovery_model: str = "claude-sonnet-4-6"  # balanced quota vs research quality
+    web_discovery_target: int = 10                  # max new models recorded per run (hard cap)
+    web_discovery_max_turns: int = 40
+    web_discovery_timeout: int = 1200
+    web_discovery_window_days: int = 14
+
     # --- Secrets plumbing ---
     keys_path: str = "keys.json"
     key_ingest_secret: str | None = None  # guards the dev-tunnel key-ingest route

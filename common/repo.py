@@ -370,6 +370,94 @@ def get_retired_important(conn: psycopg.Connection, cutoff) -> list[str]:
     return [r["slug"] for r in rows]
 
 
+# --- Web discovery: intel + aliases ---------------------------------------------------
+
+def upsert_discovered_model(
+    conn: psycopg.Connection,
+    *,
+    slug: str,
+    canonical_name: str,
+    provider: str | None,
+    est_cost: str | None,
+    performance: str | None,
+    attributes: str | None,
+    source_urls: Any | None,
+    possible_duplicate_of: str | None,
+    raw: Any | None,
+) -> None:
+    """Idempotent on slug (record-as-you-go safe); coalesces fields, bumps last_seen."""
+    conn.execute(
+        """
+        INSERT INTO discovered_models
+            (slug, canonical_name, provider, est_cost, performance, attributes, source_urls,
+             possible_duplicate_of, raw, first_seen, last_seen)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, now(), now())
+        ON CONFLICT (slug) DO UPDATE SET
+            canonical_name=EXCLUDED.canonical_name,
+            provider=COALESCE(EXCLUDED.provider, discovered_models.provider),
+            est_cost=COALESCE(EXCLUDED.est_cost, discovered_models.est_cost),
+            performance=COALESCE(EXCLUDED.performance, discovered_models.performance),
+            attributes=COALESCE(EXCLUDED.attributes, discovered_models.attributes),
+            source_urls=COALESCE(EXCLUDED.source_urls, discovered_models.source_urls),
+            possible_duplicate_of=COALESCE(EXCLUDED.possible_duplicate_of,
+                                           discovered_models.possible_duplicate_of),
+            raw=EXCLUDED.raw, last_seen=now()
+        """,
+        (slug, canonical_name, provider, est_cost, performance, attributes,
+         Json(source_urls) if source_urls is not None else None,
+         possible_duplicate_of, Json(raw) if raw is not None else None),
+    )
+
+
+def get_discovered_model(conn: psycopg.Connection, slug: str) -> dict | None:
+    return conn.execute("SELECT * FROM discovered_models WHERE slug=%s", (slug,)).fetchone()
+
+
+def list_discovered_models(conn: psycopg.Connection, status: str | None = None) -> list[dict]:
+    """Web-discovered models joined with their candidate status (for the admin app)."""
+    if status:
+        return conn.execute(
+            "SELECT d.*, c.status, c.source, c.decided_by FROM discovered_models d "
+            "JOIN candidates c USING (slug) WHERE c.status=%s ORDER BY d.first_seen DESC",
+            (status,),
+        ).fetchall()
+    return conn.execute(
+        "SELECT d.*, c.status, c.source, c.decided_by FROM discovered_models d "
+        "JOIN candidates c USING (slug) ORDER BY d.first_seen DESC"
+    ).fetchall()
+
+
+def add_alias(
+    conn: psycopg.Connection,
+    *,
+    openrouter_slug: str,
+    native_provider: str | None = None,
+    native_model_id: str | None = None,
+) -> None:
+    """Bridge an OpenRouter slug to a native identity (idempotent on openrouter_slug)."""
+    conn.execute(
+        """
+        INSERT INTO model_aliases (openrouter_slug, native_provider, native_model_id)
+        VALUES (%s,%s,%s)
+        ON CONFLICT (openrouter_slug) DO UPDATE SET
+            native_provider=COALESCE(EXCLUDED.native_provider, model_aliases.native_provider),
+            native_model_id=COALESCE(EXCLUDED.native_model_id, model_aliases.native_model_id)
+        """,
+        (openrouter_slug, native_provider, native_model_id),
+    )
+
+
+def all_aliases(conn: psycopg.Connection) -> list[dict]:
+    return conn.execute(
+        "SELECT openrouter_slug, native_provider, native_model_id FROM model_aliases"
+    ).fetchall()
+
+
+def all_openrouter_identities(conn: psycopg.Connection) -> list[dict]:
+    """Slug+name for every catalog row — caller computes normkeys in code for fuzzy matching."""
+    return conn.execute("SELECT slug, name FROM openrouter_models").fetchall()
+
+
 def has_event(conn: psycopg.Connection, event: str, slug: str) -> bool:
     """Has a run_logs event of this kind already been recorded for this slug? (alert dedup)."""
     return conn.execute(

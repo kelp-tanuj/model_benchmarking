@@ -196,6 +196,51 @@ with tab_disc:
     else:
         st.caption("None.")
 
+    st.divider()
+    st.subheader("Web discovery (claude -p research)")
+    st.caption("Scans AI news/blogs, HuggingFace, Reddit, X for new models. Uses Max quota.")
+    wpost = st.checkbox("Post a Teams summary on this run", value=False, key="web_post")
+    wtarget = st.number_input("Max new models this run", 1, 50,
+                              value=settings.web_discovery_target, key="web_target")
+    if st.button("Run web discovery now"):
+        from daemon.web_discovery import run_web_discovery
+        with st.spinner("Researching the web for new models… (this spends Max quota)"):
+            try:
+                res = run_web_discovery(target=int(wtarget), post_cards=wpost)
+                st.success(f"Recorded {len(res['new_slugs'])} new model(s): {res['new_slugs']}")
+                if res["is_error"]:
+                    st.warning("Agent reported an error — see the Logs tab.")
+            except Exception as exc:
+                st.error(f"Web discovery failed: {type(exc).__name__}: {exc}")
+        st.rerun()
+
+    with connect() as c:
+        intel = repo.list_discovered_models(c)
+    if intel:
+        st.dataframe(
+            pd.DataFrame([
+                {"slug": d["slug"], "status": d["status"], "name": d["canonical_name"],
+                 "provider": d["provider"], "est_cost": d["est_cost"],
+                 "attributes": d["attributes"], "maybe_dup_of": d["possible_duplicate_of"]}
+                for d in intel
+            ]),
+            use_container_width=True, hide_index=True,
+        )
+        st.markdown("**Decide on web-discovered models**")
+        for d in [x for x in intel if x["status"] in ("discovered", "pending")]:
+            ca, cb, cc = st.columns([3, 1, 1])
+            ca.write(f"`{d['slug']}` — {d['canonical_name']} ({d['provider'] or '?'})")
+            if cb.button("Benchmark", key=f"webbench_{d['slug']}"):
+                with connect() as c:
+                    repo.set_candidate_status(c, d["slug"], "queued", decided_by="admin")
+                st.rerun()
+            if cc.button("Skip", key=f"webskip_{d['slug']}"):
+                with connect() as c:
+                    repo.set_candidate_status(c, d["slug"], "rejected", decided_by="admin")
+                st.rerun()
+    else:
+        st.caption("No web-discovered models yet.")
+
 # --- Benchmarks monitor + drill-down -------------------------------------------------
 with tab_bench:
     st.subheader("Benchmarks")
