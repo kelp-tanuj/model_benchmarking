@@ -39,6 +39,15 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
   tested through ngrok, and waits ready for the day premium PA or a Graph app-registration lands.
   Migration 0004 allows `candidates.source='admin'`.
 
+- **Web discovery radar ✅ (second source):** `daemon/web_discovery.py` — the ONLY web-enabled
+  `claude -p` call (WebSearch+WebFetch), isolated via its own `mcp_server/discovery_server.py`
+  (`kelp_disc`) + `--strict-mcp-config` so the web agent can't reach the key-bearing eval tools.
+  Identity resolution (`common/identity.py` slugify+normkey) dedups across candidates →
+  `model_aliases` → OpenRouter (exact-normkey → writes an alias bridge, first use of that table);
+  novel → `candidate(source='web')` + `discovered_models` intel row (migration 0005). Runs nightly
+  (Sonnet), admin Discovery tab shows intel + Benchmark/Skip + "Run web discovery now". Eval/judge/
+  report/dispatcher no-web hardening untouched (regression-tested).
+
 ## Next
 - **Worker loop** — a daemon that polls `candidates(status='queued')` and runs them through
   `run_benchmark` (the admin "Enqueue"/"Benchmark" currently writes the queue; the auto-runner
@@ -52,6 +61,7 @@ Plan of record: `~/.claude/plans/i-am-building-v1-bright-pelican.md` (full desig
 - Benchmark: `uv run python -m daemon.orchestrator --use-case fixture_qa --slug gemini/gemini-2.5-flash-lite --provider gemini --model gemini-2.5-flash-lite --reps 3 --report`
 - Drift: `uv run python -m daemon.drift_runner --use-case fixture_qa`
 - Discovery sync: `uv run python -m daemon.discovery` (live) · `--fixture <json>` (offline) · `--no-cards`
+- Web discovery: `uv run python -m daemon.web_discovery --target 2 --max-turns 8 --no-cards` (claude -p WebSearch)
 - Scheduler: `uv run python -m daemon.scheduler --list`
 - HTTP endpoint: `uv run python -m daemon.http_app`   ·   Consumer: `uv run python -m daemon.teams_consumer`
 - Leaderboard (user): `uv run streamlit run apps/user/app.py`

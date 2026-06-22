@@ -169,12 +169,21 @@ def run_web_discovery(*, target: int | None = None, max_turns: int | None = None
     new_slugs = sorted(after - before)
     summary = _parse_summary(res.get("result"))
 
+    # error_max_turns is normal for a bounded scout (records persist via record-as-you-go and we
+    # count via the DB diff, not the agent's final summary) — treat it as benign, not a failure.
+    hit_turn_limit = res.get("subtype") == "error_max_turns"
+    real_error = bool(res.get("is_error")) and not hit_turn_limit
+    err = None
+    if res.get("is_error"):
+        err = {"subtype": res.get("subtype"), "num_turns": res.get("num_turns"),
+               "stderr": res.get("stderr"), "result": (res.get("result") or "")[:500]}
+
     with connect() as c:
         repo.log(c, benchmark_id=None, run_id=None,
-                 level="error" if res.get("is_error") else "info", event="web_discovery",
+                 level="error" if real_error else "info", event="web_discovery",
                  detail={"recorded": len(new_slugs), "new_slugs": new_slugs,
-                         "agent_summary": summary,
-                         "error": res.get("stderr") if res.get("is_error") else None})
+                         "agent_summary": summary, "hit_turn_limit": hit_turn_limit,
+                         "error": err})
 
     if post_cards and new_slugs:
         teams.post("web_discovery", "channel",
@@ -183,7 +192,8 @@ def run_web_discovery(*, target: int | None = None, max_turns: int | None = None
                    card=teams.alert_card("New models discovered (web)",
                                          [f"`{s}`" for s in new_slugs[:15]]))
 
-    return {"new_slugs": new_slugs, "agent_summary": summary, "is_error": bool(res.get("is_error"))}
+    return {"new_slugs": new_slugs, "agent_summary": summary,
+            "is_error": real_error, "hit_turn_limit": hit_turn_limit, "error": err}
 
 
 def main() -> None:
